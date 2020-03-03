@@ -1,0 +1,152 @@
+#### RISfinal.R
+# Imputation of DISE Data Set
+# Written by Daniel Boey (db254@duke.edu) on 11th December 18
+# Reference: https://www.analyticsvidhya.com/blog/2016/03/tutorial-powerful-packages-imputing-missing-values/
+
+library(mice)
+library(VIM)
+library(plyr)
+library(dplyr)
+library(Zelig)
+library(MatchItSE)
+#### Loading Data Set
+setwd("~/Duke Fall 18/CEE393 Research Independent Study/Gujarat")
+load('DISE.RData') 
+rm(list=setdiff(ls(), "DISE"))
+
+baseyr<-2016;
+DISE$STARTYEAR<-baseyr-DISE$STARTYEAR
+baseyr<-2016;
+DISE$ESTDYEAR<-baseyr-DISE$ESTDYEAR
+
+DISE[ ,c('SCHCD', 'PINCODE')] <- list(NULL)
+
+#### Taking out all non-continuous variables + outcomes + treatment #############
+#outcome   <-(DISE$PASSB5+DISE$PASSG5)/(DISE$APPRB5+DISE$APPRG5)
+outcome <-(DISE$P60B5+DISE$P60G5)/(DISE$APPRB5+DISE$APPRG5)
+
+# Removing missing and >1 values
+DISE<-DISE[-which(is.na(outcome)),]
+outcome   <-outcome[-which(is.na(outcome))]
+DISE<-DISE[-which(outcome>1),]
+outcome   <-outcome[-which(outcome>1)]
+
+treatment   <-DISE$CAL_YN
+treatment_el<- which(treatment %in% c("non-functional","9")) # to remove all the elements that aren't included
+treatment   <-treatment[-treatment_el]
+factor(treatment)
+#factor(treatment,levels=c("yes","no"))
+treatment<-revalue(treatment, c("yes"=1, "no"=0))
+
+outcome     <-outcome[-treatment_el]
+#outcome60   <-outcome60[-treatment_el]
+DISE        <-DISE[-treatment_el,]
+ot          <-data.frame('outcome' = outcome, 'treatment'=treatment)
+treatment_df<-data.frame('treatment'=treatment)
+ds          <-dplyr::select_if(DISE, is.numeric)
+
+treatment<-as.numeric(treatment)
+treatment[which(treatment==2)] <- c(0)
+ds[,c('SCHHRSCHILD_UPR','SCHHRSTCH_PR',  'SCHHRSTCH_UPR',  'WSEC25P_ENROLLED',  'SMCMEM_M',  'SMCMEM_F',  'SMSPARENTS_M',  'SMSPARENTS_F',  'SMCNOMLOCAL_M',  'SMCNOMLOCAL_F',  'SMCMEETINGS',  'SPLTRG_CY_ENROLLED_B',  'SPLTRG_CY_ENROLLED_G',  'SPLTRG_CY_PROVIDED_B',  'SPLTRG_CY_PROVIDED_G',  'SPLTRG_PY_ENROLLED_B',  'SPLTRG_PY_ENROLLED_G',  'SPLTRG_PY_PROVIDED_B',  'SPLTRG_PY_PROVIDED_G',  'TXTBKYEAR')]<-list(NULL)
+ds[ ,c('C1_DIS_B','C2_DIS_B','C3_DIS_B','C4_DIS_B','C5_DIS_B','C6_DIS_B','C7_DIS_B','C8_DIS_B','C9_DIS_B','C10_DIS_B','C11_DIS_B','C12_DIS_B')] <- list(NULL)
+ds[ ,c('C1_DIS_G','C2_DIS_G','C3_DIS_G','C4_DIS_G','C5_DIS_G','C6_DIS_G','C7_DIS_G','C8_DIS_G','C9_DIS_G','C10_DIS_G','C11_DIS_G','C12_DIS_G')] <- list(NULL)
+
+#### Remove columns with more than 20% NAs
+ds_small<-ds[,-which(colMeans(is.na(ds))>0.05)]
+
+
+#### Imputing Data ------
+imputed_Data <- mice(ds_small, m=1, maxit = 1, method = 'pmm', seed = 500, remove_collinear = TRUE)
+df<-imputed_Data$data
+df<-data.frame(df)
+df_smallcheck<-df[,which(colMeans(is.na(df))>0.01)] #check for non-imputed values
+#summary(imputed_Data)
+# To Store############
+#saveRDS(imputed_Data, file = 'imputed_Data.rds')
+# Propensity Score Matching -----
+library(tableone)
+library(MatchIt)
+library(sm)
+
+cdf<-bind_cols(ot,df)
+cdf_ps<-bind_cols(treatment_df,df)
+cdf<-data.frame(cdf, check.names = TRUE)
+cdf_ps<-data.frame(cdf_ps, check.names = TRUE)
+
+names<-colnames(cdf)
+names2<-colnames(df)
+names3<-paste(names2, collapse = '+')
+
+# Using normal glm gives us an error that fitted probabilities numerically 0 or 1 occured. 
+library(arm)
+psmodel<-glm(treatment~STARTYEAR+CLROOMS+CLGOOD+CLMAJOR+CLMINOR+TOILETB+TOILET_G+BOOKINLIB+COMPUTER+ESTDYEAR+LOWCLASS+HIGHCLASS+PPSTUDENT+NOINSPECT+PPTEACHER+VISITSBRC+VISITSCRC+CONTI_R+CONTI_E+SCHMNTCGRANT_R+SCHMNTCGRANT_E+FUNDS_R+FUNDS_E+WORKDAYS_PR+WORKDAYS_UPR+WORKDAYS_SEC+WORKDAYS_HSEC+C1_OB+C2_OB+C3_OB+C4_OB+C5_OB+C6_OB+C7_OB+C8_OB+C1_OG+C2_OG+C3_OG+C4_OG+C5_OG+C6_OG+C7_OG+C8_OG+C9_OB+C10_OB+C11_OB+C12_OB+C9_OG+C10_OG+C11_OG+C12_OG+FAIL1B+FAIL2B+FAIL3B+FAIL4B+FAIL5B+FAIL6B+FAIL7B+FAIL8B+FAIL1G+FAIL2G+FAIL3G+FAIL4G+FAIL5G+FAIL6G+FAIL7G+FAIL8G+FAIL9B+FAIL10B+FAIL11B+FAIL12B+FAIL9G+FAIL10G+FAIL11G+FAIL12G+C1_CB+C2_CB+C3_CB+C4_CB+C5_CB+C6_CB+C7_CB+C8_CB+C1_CG+C2_CG+C3_CG+C4_CG+C5_CG+C6_CG+C7_CG+C8_CG+C9_CB+C10_CB+C11_CB+C12_CB+C9_CG+C10_CG+C11_CG+C12_CG+C1_TB+C2_TB+C3_TB+C4_TB+C5_TB+C6_TB+C7_TB+C8_TB+C1_TG+C2_TG+C3_TG+C4_TG+C5_TG+C6_TG+C7_TG+C8_TG+C9_TB+C10_TB+C11_TB+C12_TB+C9_TG+C10_TG+C11_TG+C12_TG+C1_TOTB+C2_TOTB+C3_TOTB+C4_TOTB+C5_TOTB+C6_TOTB+C7_TOTB+C8_TOTB+C1_TOTG+C2_TOTG+C3_TOTG+C4_TOTG+C5_TOTG+C6_TOTG+C7_TOTG+C8_TOTG+APPRB5+APPRG5+C9_B+C9_G+C10_B+C10_G+C11_B+C11_G+C12_B+C12_G+SENRB5+SENRG5+SENRB8+SENRG8+APPRB8+APPRG8,family=binomial(),data=cdf_ps)
+summary(psmodel)
+#create propensity score
+pscore<-psmodel$fitted.values
+
+# Classifying into treatment groups
+ele_pscore_y<-which(treatment %in% "1")
+ele_pscore_n<-which(treatment %in% "0")
+pscore_y<-pscore[ele_pscore_y]
+pscore_n<-pscore[ele_pscore_n]
+
+hist(c(pscore_y), col='blue',nclass = 100,density=10,ylab='Number of values in bin',xlab='Propensity Score Value',main='Propensity Score Values Conditional on Covariates')
+hist(c(pscore_n), col='red', nclass=100,density=10, add=T, ylab='Propensity Score Value',main='Propensity Score Values Conditional on Covariates')
+
+# Using Match it ###########################
+m.out <- matchit(treatment~STARTYEAR+CLROOMS+CLGOOD+CLMAJOR+CLMINOR+TOILETB+TOILET_G+BOOKINLIB+COMPUTER+ESTDYEAR+LOWCLASS+HIGHCLASS+PPSTUDENT+NOINSPECT+PPTEACHER+VISITSBRC+VISITSCRC+CONTI_R+CONTI_E+SCHMNTCGRANT_R+SCHMNTCGRANT_E+FUNDS_R+FUNDS_E+WORKDAYS_PR+WORKDAYS_UPR+WORKDAYS_SEC+WORKDAYS_HSEC+C1_OB+C2_OB+C3_OB+C4_OB+C5_OB+C6_OB+C7_OB+C8_OB+C1_OG+C2_OG+C3_OG+C4_OG+C5_OG+C6_OG+C7_OG+C8_OG+C9_OB+C10_OB+C11_OB+C12_OB+C9_OG+C10_OG+C11_OG+C12_OG+FAIL1B+FAIL2B+FAIL3B+FAIL4B+FAIL5B+FAIL6B+FAIL7B+FAIL8B+FAIL1G+FAIL2G+FAIL3G+FAIL4G+FAIL5G+FAIL6G+FAIL7G+FAIL8G+FAIL9B+FAIL10B+FAIL11B+FAIL12B+FAIL9G+FAIL10G+FAIL11G+FAIL12G+C1_CB+C2_CB+C3_CB+C4_CB+C5_CB+C6_CB+C7_CB+C8_CB+C1_CG+C2_CG+C3_CG+C4_CG+C5_CG+C6_CG+C7_CG+C8_CG+C9_CB+C10_CB+C11_CB+C12_CB+C9_CG+C10_CG+C11_CG+C12_CG+C1_TB+C2_TB+C3_TB+C4_TB+C5_TB+C6_TB+C7_TB+C8_TB+C1_TG+C2_TG+C3_TG+C4_TG+C5_TG+C6_TG+C7_TG+C8_TG+C9_TB+C10_TB+C11_TB+C12_TB+C9_TG+C10_TG+C11_TG+C12_TG+C1_TOTB+C2_TOTB+C3_TOTB+C4_TOTB+C5_TOTB+C6_TOTB+C7_TOTB+C8_TOTB+C1_TOTG+C2_TOTG+C3_TOTG+C4_TOTG+C5_TOTG+C6_TOTG+C7_TOTG+C8_TOTG+APPRB5+APPRG5+C9_B+C9_G+C10_B+C10_G+C11_B+C11_G+C12_B+C12_G+SENRB5+SENRG5+SENRB8+SENRG8+APPRB8+APPRG8,
+                 data=cdf, method = "nearest")
+
+z.out <- zelig(outcome~STARTYEAR+CLROOMS+CLGOOD+CLMAJOR+CLMINOR+TOILETB+TOILET_G+BOOKINLIB+COMPUTER+ESTDYEAR+LOWCLASS+HIGHCLASS+PPSTUDENT+NOINSPECT+PPTEACHER+VISITSBRC+VISITSCRC+CONTI_R+CONTI_E+SCHMNTCGRANT_R+SCHMNTCGRANT_E+FUNDS_R+FUNDS_E+WORKDAYS_PR+WORKDAYS_UPR+WORKDAYS_SEC+WORKDAYS_HSEC+C1_OB+C2_OB+C3_OB+C4_OB+C5_OB+C6_OB+C7_OB+C8_OB+C1_OG+C2_OG+C3_OG+C4_OG+C5_OG+C6_OG+C7_OG+C8_OG+C9_OB+C10_OB+C11_OB+C12_OB+C9_OG+C10_OG+C11_OG+C12_OG+FAIL1B+FAIL2B+FAIL3B+FAIL4B+FAIL5B+FAIL6B+FAIL7B+FAIL8B+FAIL1G+FAIL2G+FAIL3G+FAIL4G+FAIL5G+FAIL6G+FAIL7G+FAIL8G+FAIL9B+FAIL10B+FAIL11B+FAIL12B+FAIL9G+FAIL10G+FAIL11G+FAIL12G+C1_CB+C2_CB+C3_CB+C4_CB+C5_CB+C6_CB+C7_CB+C8_CB+C1_CG+C2_CG+C3_CG+C4_CG+C5_CG+C6_CG+C7_CG+C8_CG+C9_CB+C10_CB+C11_CB+C12_CB+C9_CG+C10_CG+C11_CG+C12_CG+C1_TB+C2_TB+C3_TB+C4_TB+C5_TB+C6_TB+C7_TB+C8_TB+C1_TG+C2_TG+C3_TG+C4_TG+C5_TG+C6_TG+C7_TG+C8_TG+C9_TB+C10_TB+C11_TB+C12_TB+C9_TG+C10_TG+C11_TG+C12_TG+C1_TOTB+C2_TOTB+C3_TOTB+C4_TOTB+C5_TOTB+C6_TOTB+C7_TOTB+C8_TOTB+C1_TOTG+C2_TOTG+C3_TOTG+C4_TOTG+C5_TOTG+C6_TOTG+C7_TOTG+C8_TOTG+APPRB5+APPRG5+C9_B+C9_G+C10_B+C10_G+C11_B+C11_G+C12_B+C12_G+SENRB5+SENRG5+SENRB8+SENRG8+APPRB8+APPRG8,
+               data = match.data(m.out), 
+               model = "ls")
+######################
+m.data1 <- match.data(m.out,distance ="pscore") # create ps matched data set from previous output
+hist(m.data1$pscore) # distribution of propenisty scores
+summary(m.data1$pscore)
+t.test(m.data1$outcome[m.data1$treatment==1],m.data1$outcome[m.data1$treatment==0],paired=TRUE)
+#summary(m.out, covariates=T)
+
+att(obj = m.out, Y = cdf$outcome)
+#abadie_imbens_se(obj = m.out, Y = cdf$outocme)
+
+pscore2_y<-m.data1$pscore[m.data1$treatment==1]
+pscore2_n<-m.data1$pscore[m.data1$treatment==0]
+
+hist(c(pscore2_y), col='blue',nclass = 100,density=10,ylab='Number of values in bin',xlab='Propensity Score Value',main='Propensity Score Values Conditional on Covariates')
+hist(c(pscore2_n), col='red', nclass=100,density=10, add=T, ylab='Propensity Score Value',main='Propensity Score Values Conditional on Covariates')
+
+#### Retesting Pscores
+library(nonrandom)
+datatest<-pscore(treatment~STARTYEAR+CLROOMS+CLGOOD+CLMAJOR+CLMINOR+TOILETB+TOILET_G+BOOKINLIB+COMPUTER+ESTDYEAR+LOWCLASS+HIGHCLASS+PPSTUDENT+NOINSPECT+PPTEACHER+VISITSBRC+VISITSCRC+CONTI_R+CONTI_E+SCHMNTCGRANT_R+SCHMNTCGRANT_E+FUNDS_R+FUNDS_E+WORKDAYS_PR+WORKDAYS_UPR+WORKDAYS_SEC+WORKDAYS_HSEC+C1_OB+C2_OB+C3_OB+C4_OB+C5_OB+C6_OB+C7_OB+C8_OB+C1_OG+C2_OG+C3_OG+C4_OG+C5_OG+C6_OG+C7_OG+C8_OG+C9_OB+C10_OB+C11_OB+C12_OB+C9_OG+C10_OG+C11_OG+C12_OG+FAIL1B+FAIL2B+FAIL3B+FAIL4B+FAIL5B+FAIL6B+FAIL7B+FAIL8B+FAIL1G+FAIL2G+FAIL3G+FAIL4G+FAIL5G+FAIL6G+FAIL7G+FAIL8G+FAIL9B+FAIL10B+FAIL11B+FAIL12B+FAIL9G+FAIL10G+FAIL11G+FAIL12G+C1_CB+C2_CB+C3_CB+C4_CB+C5_CB+C6_CB+C7_CB+C8_CB+C1_CG+C2_CG+C3_CG+C4_CG+C5_CG+C6_CG+C7_CG+C8_CG+C9_CB+C10_CB+C11_CB+C12_CB+C9_CG+C10_CG+C11_CG+C12_CG+C1_TB+C2_TB+C3_TB+C4_TB+C5_TB+C6_TB+C7_TB+C8_TB+C1_TG+C2_TG+C3_TG+C4_TG+C5_TG+C6_TG+C7_TG+C8_TG+C9_TB+C10_TB+C11_TB+C12_TB+C9_TG+C10_TG+C11_TG+C12_TG+C1_TOTB+C2_TOTB+C3_TOTB+C4_TOTB+C5_TOTB+C6_TOTB+C7_TOTB+C8_TOTB+C1_TOTG+C2_TOTG+C3_TOTG+C4_TOTG+C5_TOTG+C6_TOTG+C7_TOTG+C8_TOTG+APPRB5+APPRG5+C9_B+C9_G+C10_B+C10_G+C11_B+C11_G+C12_B+C12_G+SENRB5+SENRG5+SENRB8+SENRG8+APPRB8+APPRG8,family=binomial(),data=cdf_ps)
+pscore3_y<-datatest$data$pscore[datatest$data$treatment==1]
+pscore3_n<-datatest$data$pscore[datatest$data$treatment==0]
+
+hist(c(pscore3_y), col='blue',nclass = 100,density=10,ylab='Number of values in bin',xlab='Propensity Score Value',main='Propensity Score Values Conditional on Covariates')
+hist(c(pscore3_n), col='red', nclass=100,density=10, add=T, ylab='Propensity Score Value',main='Propensity Score Values Conditional on Covariates')
+
+#x.out1 <- setx(z.out, data = match.data(m.out, "treat"), cond = TRUE)
+#s.out1 <- Zelig::sim(z.out, x = x.out1)
+#x.out <- setx(z.out, treatment=0)
+#x1.out <- setx(z.out, treatment=1)
+#s.out <- Zelig::sim(z.out, x = x.out, x1 = x1.out)
+#summary(s.out)
+
+#eliminate 1 and 0 / just glm the pscore
+
+#### Attempting to use multi-cores ------------
+#cores_2_use <- detectCores() - 1
+#library(parallel)
+#library(foreach)
+#library(doParallel)
+#cl <- makeCluster(cores_2_use)
+
+#clusterSetRNGStream(cl, 9956)
+#clusterExport(cl, "nhanes")
+#clusterEvalQ(cl, library(mice))
+#imp_pars <- 
+#  parLapply(cl = cl, X = 1:cores_2_use, fun = function(no){
+#    mice(ds_small, m=1, maxit = 500, method = 'cart', seed = 500)
+#  })
+#stopCluster(cl)
+t.test(outcome[treatment==1],outcome[treatment==0])
